@@ -1,0 +1,144 @@
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/ip.h>
+#include <ifaddrs.h>
+#include <stdlib.h>
+struct in_addr selfip () {
+    struct ifaddrs *interfaces = NULL;
+    struct ifaddrs *ifa = NULL;
+    getifaddrs(&interfaces);
+    for (ifa = interfaces; ifa != NULL; ifa = (*ifa).ifa_next) {
+        if (ifa->ifa_addr && ifa->ifa_addr->sa_family == AF_INET) {
+            struct sockaddr_in *socket_address = (struct sockaddr_in *)ifa->ifa_addr;
+            struct in_addr current_ip = socket_address->sin_addr;
+            if (current_ip.s_addr != htonl(INADDR_LOOPBACK)) {
+                freeifaddrs(interfaces);
+                return current_ip; 
+            };
+        };
+    };
+}
+struct in_addr translate (char *untranslated) {
+    struct in_addr translated;
+    unsigned int a,b,c,d;
+    sscanf(untranslated, "%u.%u.%u.%u", &a,&b,&c,&d);
+    uint32_t host_ordered_ip = (a << 24) | (b << 16) | (c << 8) | d;
+    uint32_t packet_ready_ip = htonl(host_ordered_ip);
+    translated.s_addr=packet_ready_ip;
+    return translated;
+}
+unsigned short calculate_checksum(unsigned short *addr, int count) {
+    register long sum = 0;
+
+    // Sum up 16-bit chunks
+    while (count > 1) {
+        sum += *addr++;
+        count -= 2;
+    }
+
+    // If there is a leftover byte (odd header length), add it
+    if (count > 0) {
+        sum += *(unsigned char *)addr;
+    }
+
+    // Fold 32-bit sum to 16 bits
+    while (sum >> 16) {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+
+    // Return the one's complement (bit-flipped) result
+    return (unsigned short)(~sum);
+}
+
+int main (int argc, char *archv[]) {
+    //struct in_addr g=selfip();
+    int sock = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
+    int one = 1;
+    setsockopt(sock,IPPROTO_IP,IP_HDRINCL,&one,sizeof(one));
+    struct ip *iph = malloc(sizeof(struct ip)+sizeof(uint32_t));
+    //initialize header
+    (*iph).ip_hl = 5;
+    (*iph).ip_v = 4;
+    (*iph).ip_ttl = 64;
+    (*iph).ip_p = IPPROTO_RAW;
+    (*iph).ip_src = selfip();
+    (*iph).ip_dst = translate(archv[1]);
+    (*iph).ip_len = htons(sizeof(struct in_addr)+sizeof(struct ip));
+    (*iph).ip_tos = 0x88;
+    (*iph).ip_id = htons(52013);
+    (*iph).ip_off = 0;
+    (*iph).ip_sum = 0;
+    char givendest[16];
+    fgets(&givendest[0], 16*sizeof(char), stdin);
+    uint32_t truedest = translate(&givendest[0]).s_addr;
+        /*struct payload {
+            char msg[5200000];
+        };
+        struct payload *msg=&iph+1;
+        fgets((*msg).msg, 5200000*sizeof(char), stdin);*/
+    uint32_t *destmsg = iph+1;
+    *destmsg = truedest;
+    (*iph).ip_sum = calculate_checksum((unsigned short *) iph, (*iph).ip_hl * 4);
+    (*iph).ip_len = sizeof(struct in_addr)+sizeof(struct ip);
+    struct sockaddr_in dst = {
+        .sin_family = AF_INET,
+        .sin_addr = translate(archv[1]),
+        .sin_port = 0,
+    };
+    ssize_t sent = sendto(
+        sock,                          // the raw socket
+        iph,                           // pointer to start of buffer (header + payload)
+        (*iph).ip_len,          // total bytes to send, converted back to host order
+        0,                             // flags, 0 = none
+        (struct sockaddr *)&dst,       // destination — kernel uses this to pick the interface
+        sizeof(dst)
+    );
+    if (sent < 0) {
+        perror("sendto");
+    };
+    free(iph);
+    while (1) {
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(STDIN_FILENO, &readfds);   // fd 0
+        FD_SET(sock, &readfds);
+
+        select(sock+1, &readfds, NULL, NULL, NULL);  // blocks until one is ready
+
+        if (FD_ISSET(STDIN_FILENO, &readfds)) {
+            char *input = malloc(5200020*sizeof(char));
+            if (fgets(input+20, 5200000*sizeof(char), stdin)) {
+                struct ip *iph = input;
+                (*iph).ip_hl = 5;
+                (*iph).ip_v = 4;
+                (*iph).ip_ttl = 64;
+                (*iph).ip_p = IPPROTO_RAW;
+                (*iph).ip_src = selfip();
+                (*iph).ip_dst = translate(archv[1]);
+                (*iph).ip_len = htons(strlen(input+20)+sizeof(struct ip));
+                (*iph).ip_tos = 0x88;
+                (*iph).ip_id = htons(52013);
+                (*iph).ip_off = 0;
+                (*iph).ip_sum = 0;
+                (*iph).ip_sum = calculate_checksum((unsigned short *) iph, (*iph).ip_hl * 4);
+                (*iph).ip_len = strlen(input+20)+sizeof(struct ip);
+                if (sendto(sock, iph, (*iph).ip_len, 0, (struct sockaddr *)&dst, sizeof(dst))<0) {
+                    perror("sendto");
+                };
+                free(input);
+            };
+        };
+
+        if (FD_ISSET(sock, &readfds)) {
+            char *rcvpacket = malloc(5200020*sizeof(char));
+            if (recv(sock, rcvpacket, 5200020*sizeof(char), 0)) {
+                printf("%s\n", rcvpacket+20);
+            };
+        };
+
+    };
+    return 0;
+}
