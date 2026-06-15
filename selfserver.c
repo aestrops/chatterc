@@ -23,28 +23,41 @@ struct in_addr selfip () {
     };
 }
 int main () {
-    struct in_addr *firstiph = malloc(24*sizeof(char));
     int sock = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
     int one = 1;
+    int firstpacket = 0;
     setsockopt(sock,IPPROTO_IP,IP_HDRINCL,&one,sizeof(one));
-    recv(sock, firstiph, 24*sizeof(char), 0);
+    struct in_addr *firstiph;
+    while (firstpacket == 0) {
+        firstiph = malloc(24*sizeof(char));
+        if (recv(sock, firstiph, 24*sizeof(char), MSG_TRUNC) == 24 && *(uint16_t *)(firstiph+1) == htons(52013)) {
+            firstpacket = 1;
+        } else {
+            free(firstiph);
+        }
+    }
     while (1) {
-        struct ip *iph = malloc(5200020*sizeof(char));
-        if (recv(sock, iph, 5200020*sizeof(char), 0)) {
-            if ((*iph).ip_src.s_addr != (*(firstiph+5)).s_addr) {   
+        struct ip *iph = malloc(65535*sizeof(char));
+        int our = 0;
+        if (recv(sock, iph, 65535*sizeof(char), 0)) {
+            if ((*iph).ip_src.s_addr != (*(firstiph+5)).s_addr && (*iph).ip_id == htons(52013)) {   
                 (*iph).ip_dst = *(firstiph+5);
-            } else {
-                (*iph).ip_dst = *(firstiph+4);
+                our = 1;
+            } else if ((*iph).ip_src.s_addr == (*(firstiph+5)).s_addr && (*iph).ip_id == htons(52013)) {
+                (*iph).ip_dst = *(firstiph+3);
+                our = 1;
             }
-            (*iph).ip_src = selfip();
-            struct sockaddr_in dst = {
-            .sin_family = AF_INET,
-            .sin_addr = (*iph).ip_dst,
-            .sin_port = 0,
-            };
-            if (sendto(sock, iph, (*iph).ip_len, 0, (struct sockaddr *)&dst, sizeof(dst))<0) {
-                perror("sendto");
-            };
+            if (our == 1) {
+                (*iph).ip_src = selfip();
+                struct sockaddr_in dst = {
+                .sin_family = AF_INET,
+                .sin_addr = (*iph).ip_dst,
+                .sin_port = 0,
+                };
+                if (sendto(sock, iph, (*iph).ip_len, 0, (struct sockaddr *)&dst, sizeof(dst))<0) {
+                    perror("sendto");
+                };
+            }
         };
         free(iph);
     };

@@ -1,3 +1,4 @@
+#include <_types/_uint32_t.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -100,6 +101,8 @@ int main (int argc, char *archv[]) {
         perror("sendto");
     };
     free(iph);
+    uint32_t source;
+    uint32_t dest;
     while (1) {
         fd_set readfds;
         FD_ZERO(&readfds);
@@ -109,8 +112,8 @@ int main (int argc, char *archv[]) {
         select(sock+1, &readfds, NULL, NULL, NULL);  // blocks until one is ready
 
         if (FD_ISSET(STDIN_FILENO, &readfds)) {
-            char *input = malloc(5200020*sizeof(char));
-            if (fgets(input+20, 5200000*sizeof(char), stdin)) {
+            char *input = malloc(65535*sizeof(char));
+            if (fgets(input+20, 65515*sizeof(char), stdin)) {
                 struct ip *iph = input;
                 (*iph).ip_hl = 5;
                 (*iph).ip_v = 4;
@@ -133,10 +136,15 @@ int main (int argc, char *archv[]) {
         };
 
         if (FD_ISSET(sock, &readfds)) {
-            char *rcvpacket = malloc(5200020*sizeof(char));
-            if (recv(sock, rcvpacket, 5200020*sizeof(char), 0)) {
-                printf("%s\n", rcvpacket+20);
+            char *rcvpacket = malloc(65535*sizeof(char));
+            if (recv(sock, rcvpacket, 65535*sizeof(char), 0)) {
+                source = *(uint32_t *)(rcvpacket+12);
+                dest = *(uint32_t *)(rcvpacket+16);
+                if (source == translate(archv[1]).s_addr && dest == selfip().s_addr && *(uint16_t *)(rcvpacket+4) == htons(52013)) {
+                    printf("%s\n", rcvpacket+20);
+                }
             };
+            free(rcvpacket);
         };
 
     };
