@@ -59,7 +59,7 @@ int main (int argc, char *archv[]) {
     int sock = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
     int one = 1;
     setsockopt(sock,IPPROTO_IP,IP_HDRINCL,&one,sizeof(one));
-    struct ip *iph = malloc(sizeof(struct ip)+sizeof(uint32_t));
+    struct ip *iph = malloc(sizeof(struct ip));
     //initialize header
     (*iph).ip_hl = 5;
     (*iph).ip_v = 4;
@@ -67,23 +67,13 @@ int main (int argc, char *archv[]) {
     (*iph).ip_p = IPPROTO_RAW;
     (*iph).ip_src = selfip();
     (*iph).ip_dst = translate(archv[1]);
-    (*iph).ip_len = htons(sizeof(struct in_addr)+sizeof(struct ip));
+    (*iph).ip_len = htons(sizeof(struct ip));
     (*iph).ip_tos = 0x88;
     (*iph).ip_id = htons(52013);
     (*iph).ip_off = 0;
     (*iph).ip_sum = 0;
-    char givendest[16];
-    fgets(&givendest[0], 16*sizeof(char), stdin);
-    uint32_t truedest = translate(&givendest[0]).s_addr;
-        /*struct payload {
-            char msg[5200000];
-        };
-        struct payload *msg=&iph+1;
-        fgets((*msg).msg, 5200000*sizeof(char), stdin);*/
-    uint32_t *destmsg = iph+1;
-    *destmsg = truedest;
     (*iph).ip_sum = calculate_checksum((unsigned short *) iph, (*iph).ip_hl * 4);
-    (*iph).ip_len = sizeof(struct in_addr)+sizeof(struct ip);
+    (*iph).ip_len = sizeof(struct ip);
     struct sockaddr_in dst = {
         .sin_family = AF_INET,
         .sin_addr = translate(archv[1]),
